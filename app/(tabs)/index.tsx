@@ -1,6 +1,13 @@
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useState } from "react";
-import { Dimensions, Pressable, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  Animated,
+  Dimensions,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { height } = Dimensions.get("window");
@@ -68,6 +75,80 @@ const QUESTS: Record<Emotion, string[]> = {
   ],
 };
 
+// Animated speech bubble component
+function SpeechBubble({ text }: { text: string }) {
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const dotOpacity = useRef(new Animated.Value(0)).current;
+  const prevTextRef = useRef(text);
+
+  useEffect(() => {
+    if (prevTextRef.current !== text) {
+      prevTextRef.current = text;
+
+      // Reset animations
+      fadeAnim.setValue(0);
+      slideAnim.setValue(8);
+      dotOpacity.setValue(1);
+
+      // Animate in
+      Animated.parallel([
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      // Fade out dot
+      Animated.sequence([
+        Animated.delay(600),
+        Animated.timing(dotOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [text, fadeAnim, slideAnim, dotOpacity]);
+
+  return (
+    <View style={styles.speechBubbleContainer}>
+      {/* New dialogue indicator dot */}
+      <Animated.View
+        style={[
+          styles.newDialogueDot,
+          { opacity: dotOpacity },
+        ]}
+      />
+
+      {/* Speech bubble */}
+      <View style={styles.speechBubble}>
+        {/* Bubble tail */}
+        <View style={styles.bubbleTail} />
+
+        {/* Animated text */}
+        <Animated.Text
+          style={[
+            styles.speechText,
+            {
+              opacity: fadeAnim,
+              transform: [{ translateY: slideAnim }],
+            },
+          ]}
+        >
+          {text}
+        </Animated.Text>
+      </View>
+    </View>
+  );
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [fogCleared, setFogCleared] = useState(false);
@@ -76,6 +157,7 @@ export default function HomeScreen() {
   const [feedback, setFeedback] = useState<string>("");
   const [quest, setQuest] = useState<string>("");
   const [questDone, setQuestDone] = useState(false);
+  const [dialogue, setDialogue] = useState("Could you help me clear the way?");
 
   const readyForCheckIn = fogCleared || leavesCleared;
 
@@ -89,15 +171,32 @@ export default function HomeScreen() {
     return options[Math.floor(Math.random() * options.length)];
   };
 
+  const onFogClear = () => {
+    if (!fogCleared) {
+      setFogCleared(true);
+      setDialogue("The fog thins a little.");
+    }
+  };
+
+  const onLeavesClear = () => {
+    if (!leavesCleared) {
+      setLeavesCleared(true);
+      setDialogue("Leaves drift away.");
+    }
+  };
+
   const onSelectEmotion = (e: Emotion) => {
     setEmotion(e);
     setQuest(pickQuest(e));
     setQuestDone(false);
+    setDialogue("A path appears.");
   };
 
   const onDone = () => {
     setQuestDone(true);
-    setFeedback(pickFeedback(emotion!));
+    const fb = pickFeedback(emotion!);
+    setFeedback(fb);
+    setDialogue(fb);
   };
 
   const resetMorning = () => {
@@ -107,6 +206,7 @@ export default function HomeScreen() {
     setFeedback("");
     setQuest("");
     setQuestDone(false);
+    setDialogue("Could you help me clear the way?");
   };
 
   return (
@@ -158,15 +258,14 @@ export default function HomeScreen() {
           <Text style={styles.aetherlingName}>Aetherling</Text>
         </View>
 
-        <Text style={styles.aetherlingLine}>
-          {feedback || "Could you help me clear the way?"}
-        </Text>
+        {/* Speech bubble */}
+        <SpeechBubble text={dialogue} />
 
         {/* Scene actions */}
         <View style={styles.sceneActions}>
           <Pressable
             style={[styles.sceneBtn, fogCleared && styles.sceneBtnDone]}
-            onPress={() => setFogCleared(true)}
+            onPress={onFogClear}
           >
             <Text style={styles.sceneBtnText}>
               {fogCleared ? "Fog cleared" : "Clear fog"}
@@ -175,7 +274,7 @@ export default function HomeScreen() {
 
           <Pressable
             style={[styles.sceneBtn, leavesCleared && styles.sceneBtnDone]}
-            onPress={() => setLeavesCleared(true)}
+            onPress={onLeavesClear}
           >
             <Text style={styles.sceneBtnText}>
               {leavesCleared ? "Leaves swept" : "Brush leaves"}
@@ -382,20 +481,59 @@ const styles = StyleSheet.create({
     color: "rgba(255, 200, 150, 0.5)",
     textTransform: "uppercase",
   },
-  aetherlingLine: {
-    marginTop: 14,
-    fontSize: 14,
-    color: "rgba(255, 248, 240, 0.55)",
+
+  // Speech bubble
+  speechBubbleContainer: {
+    marginTop: 12,
+    alignItems: "center",
+  },
+  newDialogueDot: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#f4a040",
+    zIndex: 10,
+  },
+  speechBubble: {
+    backgroundColor: "rgba(255, 250, 240, 0.08)",
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255, 200, 150, 0.15)",
+    maxWidth: 280,
+    minHeight: 44,
+    justifyContent: "center",
+  },
+  bubbleTail: {
+    position: "absolute",
+    top: -6,
+    left: "50%",
+    marginLeft: -6,
+    width: 12,
+    height: 12,
+    backgroundColor: "rgba(255, 250, 240, 0.08)",
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderColor: "rgba(255, 200, 150, 0.15)",
+    transform: [{ rotate: "45deg" }],
+  },
+  speechText: {
+    fontSize: 16,
+    color: "rgba(255, 248, 240, 0.85)",
     fontStyle: "italic",
     textAlign: "center",
-    paddingHorizontal: 40,
+    lineHeight: 22,
   },
 
   // Scene actions
   sceneActions: {
     flexDirection: "row",
     gap: 12,
-    marginTop: 20,
+    marginTop: 16,
   },
   sceneBtn: {
     paddingVertical: 10,
