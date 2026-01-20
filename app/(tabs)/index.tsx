@@ -1,5 +1,6 @@
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useEffect, useRef, useState } from "react";
+import * as Haptics from "expo-haptics";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Dimensions,
@@ -8,9 +9,19 @@ import {
   Text,
   View,
 } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  completeQuest,
+  getTodayKey,
+  loadTodayLog,
+  loadWorldState,
+  recordDailyVisit,
+  WorldState,
+} from "@/lib/storage";
 
-const { height } = Dimensions.get("window");
+const { width, height } = Dimensions.get("window");
+const SCENE_HEIGHT = height * 0.48;
 
 type Emotion = "stuck" | "frustrated" | "inspired" | "alright";
 
@@ -75,6 +86,175 @@ const QUESTS: Record<Emotion, string[]> = {
   ],
 };
 
+// Initial fog wisp positions (relative to scene)
+const FOG_WISPS = [
+  { id: 1, x: width * 0.15, y: SCENE_HEIGHT * 0.15, size: 90, rotation: -8 },
+  { id: 2, x: width * 0.55, y: SCENE_HEIGHT * 0.12, size: 70, rotation: 5 },
+  { id: 3, x: width * 0.3, y: SCENE_HEIGHT * 0.35, size: 100, rotation: -3 },
+  { id: 4, x: width * 0.7, y: SCENE_HEIGHT * 0.32, size: 80, rotation: 8 },
+  { id: 5, x: width * 0.1, y: SCENE_HEIGHT * 0.55, size: 85, rotation: -5 },
+];
+
+// Initial leaf positions
+const LEAVES = [
+  { id: 1, x: width * 0.2, y: SCENE_HEIGHT * 0.7, rotation: 45 },
+  { id: 2, x: width * 0.5, y: SCENE_HEIGHT * 0.75, rotation: -30 },
+  { id: 3, x: width * 0.75, y: SCENE_HEIGHT * 0.68, rotation: 60 },
+  { id: 4, x: width * 0.35, y: SCENE_HEIGHT * 0.82, rotation: -15 },
+  { id: 5, x: width * 0.6, y: SCENE_HEIGHT * 0.85, rotation: 30 },
+];
+
+// Interactive fog wisp component
+function FogWisp({
+  x,
+  y,
+  size,
+  rotation,
+  cleared,
+  onClear,
+}: {
+  x: number;
+  y: number;
+  size: number;
+  rotation: number;
+  cleared: boolean;
+  onClear: () => void;
+}) {
+  const opacity = useRef(new Animated.Value(1)).current;
+  const scale = useRef(new Animated.Value(1)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (cleared) {
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(scale, {
+          toValue: 1.3,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: -30,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [cleared, opacity, scale, translateY]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.fogWisp,
+        {
+          left: x - size / 2,
+          top: y - 25,
+          width: size,
+          height: 50,
+          transform: [
+            { rotate: `${rotation}deg` },
+            { scale },
+            { translateY },
+          ],
+          opacity,
+        },
+      ]}
+      pointerEvents={cleared ? "none" : "auto"}
+    >
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={onClear}
+      />
+    </Animated.View>
+  );
+}
+
+// Interactive leaf component
+function Leaf({
+  x,
+  y,
+  rotation,
+  cleared,
+  onClear,
+}: {
+  x: number;
+  y: number;
+  rotation: number;
+  cleared: boolean;
+  onClear: () => void;
+}) {
+  const opacity = useRef(new Animated.Value(1)).current;
+  const translateX = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
+  const spin = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (cleared) {
+      const direction = Math.random() > 0.5 ? 1 : -1;
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 0,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateX, {
+          toValue: direction * (50 + Math.random() * 50),
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: -80 - Math.random() * 40,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(spin, {
+          toValue: direction * 2,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [cleared, opacity, translateX, translateY, spin]);
+
+  const spinInterpolate = spin.interpolate({
+    inputRange: [-2, 2],
+    outputRange: ["-360deg", "360deg"],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        styles.leaf,
+        {
+          left: x - 12,
+          top: y - 8,
+          transform: [
+            { rotate: `${rotation}deg` },
+            { translateX },
+            { translateY },
+            { rotate: spinInterpolate },
+          ],
+          opacity,
+        },
+      ]}
+      pointerEvents={cleared ? "none" : "auto"}
+    >
+      <Pressable
+        style={styles.leafTouchArea}
+        onPress={onClear}
+      >
+        <View style={styles.leafBody}>
+          <View style={styles.leafStem} />
+        </View>
+      </Pressable>
+    </Animated.View>
+  );
+}
+
 // Animated speech bubble component
 function SpeechBubble({ text }: { text: string }) {
   const fadeAnim = useRef(new Animated.Value(1)).current;
@@ -86,12 +266,10 @@ function SpeechBubble({ text }: { text: string }) {
     if (prevTextRef.current !== text) {
       prevTextRef.current = text;
 
-      // Reset animations
       fadeAnim.setValue(0);
       slideAnim.setValue(8);
       dotOpacity.setValue(1);
 
-      // Animate in
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
@@ -105,7 +283,6 @@ function SpeechBubble({ text }: { text: string }) {
         }),
       ]).start();
 
-      // Fade out dot
       Animated.sequence([
         Animated.delay(600),
         Animated.timing(dotOpacity, {
@@ -119,20 +296,9 @@ function SpeechBubble({ text }: { text: string }) {
 
   return (
     <View style={styles.speechBubbleContainer}>
-      {/* New dialogue indicator dot */}
-      <Animated.View
-        style={[
-          styles.newDialogueDot,
-          { opacity: dotOpacity },
-        ]}
-      />
-
-      {/* Speech bubble */}
+      <Animated.View style={[styles.newDialogueDot, { opacity: dotOpacity }]} />
       <View style={styles.speechBubble}>
-        {/* Bubble tail */}
         <View style={styles.bubbleTail} />
-
-        {/* Animated text */}
         <Animated.Text
           style={[
             styles.speechText,
@@ -151,15 +317,110 @@ function SpeechBubble({ text }: { text: string }) {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const [fogCleared, setFogCleared] = useState(false);
-  const [leavesCleared, setLeavesCleared] = useState(false);
+  const [clearedFog, setClearedFog] = useState<Set<number>>(new Set());
+  const [clearedLeaves, setClearedLeaves] = useState<Set<number>>(new Set());
   const [emotion, setEmotion] = useState<Emotion | null>(null);
   const [feedback, setFeedback] = useState<string>("");
   const [quest, setQuest] = useState<string>("");
   const [questDone, setQuestDone] = useState(false);
   const [dialogue, setDialogue] = useState("Could you help me clear the way?");
+  const [newUnlocks, setNewUnlocks] = useState<string[]>([]);
+  const [alreadyCheckedIn, setAlreadyCheckedIn] = useState(false);
+  const [worldState, setWorldState] = useState<WorldState | null>(null);
 
+  const fogCleared = clearedFog.size >= 3;
+  const leavesCleared = clearedLeaves.size >= 3;
   const readyForCheckIn = fogCleared || leavesCleared;
+
+  // Load saved state on mount
+  useEffect(() => {
+    async function loadState() {
+      const [state, todayLog] = await Promise.all([
+        loadWorldState(),
+        loadTodayLog(),
+      ]);
+      setWorldState(state);
+
+      const today = getTodayKey();
+      if (state.lastVisitDate === today) {
+        setAlreadyCheckedIn(true);
+        setClearedFog(new Set(FOG_WISPS.map((f) => f.id)));
+        setClearedLeaves(new Set(LEAVES.map((l) => l.id)));
+        if (todayLog.completedQuests.length > 0) {
+          setQuestDone(true);
+          setDialogue("Welcome back, Lanternkeeper.");
+        } else {
+          setDialogue("You've already visited today.");
+        }
+      }
+    }
+    loadState();
+  }, []);
+
+  // Update dialogue when fog/leaves are cleared
+  useEffect(() => {
+    if (!alreadyCheckedIn) {
+      if (fogCleared && !leavesCleared && clearedFog.size === 3) {
+        setDialogue("The fog thins a little.");
+      } else if (leavesCleared && !fogCleared && clearedLeaves.size === 3) {
+        setDialogue("Leaves drift away.");
+      } else if (fogCleared && leavesCleared) {
+        setDialogue("The path is clear.");
+      }
+    }
+  }, [fogCleared, leavesCleared, clearedFog.size, clearedLeaves.size, alreadyCheckedIn]);
+
+  const handleClearFog = useCallback((id: number) => {
+    setClearedFog((prev) => {
+      if (prev.has(id)) return prev;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleClearLeaf = useCallback((id: number) => {
+    setClearedLeaves((prev) => {
+      if (prev.has(id)) return prev;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Pan gesture for swiping across multiple elements
+  const panGesture = Gesture.Pan()
+    .onUpdate((event) => {
+      const touchX = event.x;
+      const touchY = event.y;
+
+      // Check fog wisps
+      FOG_WISPS.forEach((wisp) => {
+        if (!clearedFog.has(wisp.id)) {
+          const dx = touchX - wisp.x;
+          const dy = touchY - wisp.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          if (distance < wisp.size / 2 + 20) {
+            handleClearFog(wisp.id);
+          }
+        }
+      });
+
+      // Check leaves
+      LEAVES.forEach((leaf) => {
+        if (!clearedLeaves.has(leaf.id)) {
+          const dx = touchX - leaf.x;
+          const dy = touchY - leaf.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          if (distance < 35) {
+            handleClearLeaf(leaf.id);
+          }
+        }
+      });
+    })
+    .minDistance(0);
 
   const pickFeedback = (e: Emotion) => {
     const options = FEEDBACK[e];
@@ -171,41 +432,60 @@ export default function HomeScreen() {
     return options[Math.floor(Math.random() * options.length)];
   };
 
-  const onFogClear = () => {
-    if (!fogCleared) {
-      setFogCleared(true);
-      setDialogue("The fog thins a little.");
-    }
-  };
+  const onSelectEmotion = useCallback(
+    async (e: Emotion) => {
+      setEmotion(e);
+      setQuest(pickQuest(e));
+      setQuestDone(false);
+      setDialogue("A path appears.");
 
-  const onLeavesClear = () => {
-    if (!leavesCleared) {
-      setLeavesCleared(true);
-      setDialogue("Leaves drift away.");
-    }
-  };
+      const previousRegions = worldState?.unlockedRegions ?? ["lantern-clearing"];
+      const updatedState = await recordDailyVisit(e);
+      setWorldState(updatedState);
+      setAlreadyCheckedIn(true);
 
-  const onSelectEmotion = (e: Emotion) => {
-    setEmotion(e);
-    setQuest(pickQuest(e));
-    setQuestDone(false);
-    setDialogue("A path appears.");
-  };
+      const newlyUnlocked = updatedState.unlockedRegions.filter(
+        (r) => !previousRegions.includes(r)
+      );
+      if (newlyUnlocked.length > 0) {
+        setNewUnlocks(newlyUnlocked);
+      }
+    },
+    [worldState]
+  );
 
-  const onDone = () => {
+  const onDone = useCallback(async () => {
     setQuestDone(true);
     const fb = pickFeedback(emotion!);
     setFeedback(fb);
-    setDialogue(fb);
-  };
+
+    if (newUnlocks.length > 0) {
+      const regionNames: Record<string, string> = {
+        "workshop-glade": "Workshop Glade",
+        "fog-valley": "Fog Valley",
+        "warm-river": "Warm River",
+        "observatory-balcony": "Observatory Balcony",
+        "the-long-path": "The Long Path",
+      };
+      const unlockName = regionNames[newUnlocks[0]] ?? newUnlocks[0];
+      setDialogue(`New region unlocked: ${unlockName}`);
+      setNewUnlocks([]);
+    } else {
+      setDialogue(fb);
+    }
+
+    const questId = `${getTodayKey()}-${emotion}`;
+    await completeQuest(questId);
+  }, [emotion, newUnlocks]);
 
   const resetMorning = () => {
-    setFogCleared(false);
-    setLeavesCleared(false);
+    setClearedFog(new Set());
+    setClearedLeaves(new Set());
     setEmotion(null);
     setFeedback("");
     setQuest("");
     setQuestDone(false);
+    setAlreadyCheckedIn(false);
     setDialogue("Could you help me clear the way?");
   };
 
@@ -218,75 +498,111 @@ export default function HomeScreen() {
       />
 
       {/* === SCENE === */}
-      <View style={[styles.scene, { paddingTop: insets.top + 16 }]}>
-        {/* Fog layers */}
-        <View
-          style={[styles.fog, styles.fog1, fogCleared && styles.fogCleared]}
-        />
-        <View
-          style={[styles.fog, styles.fog2, fogCleared && styles.fogCleared]}
-        />
-        <View
-          style={[styles.fog, styles.fog3, leavesCleared && styles.fogCleared]}
-        />
+      <GestureDetector gesture={panGesture}>
+        <View style={[styles.scene, { paddingTop: insets.top + 16 }]}>
+          {/* Interactive fog wisps */}
+          {FOG_WISPS.map((wisp) => (
+            <FogWisp
+              key={wisp.id}
+              x={wisp.x}
+              y={wisp.y}
+              size={wisp.size}
+              rotation={wisp.rotation}
+              cleared={clearedFog.has(wisp.id)}
+              onClear={() => handleClearFog(wisp.id)}
+            />
+          ))}
 
-        {/* Lantern glow */}
-        <View style={styles.glowOuter} />
-        <View style={styles.glowMiddle} />
-        <View style={styles.glowInner} />
+          {/* Interactive leaves */}
+          {LEAVES.map((leaf) => (
+            <Leaf
+              key={leaf.id}
+              x={leaf.x}
+              y={leaf.y}
+              rotation={leaf.rotation}
+              cleared={clearedLeaves.has(leaf.id)}
+              onClear={() => handleClearLeaf(leaf.id)}
+            />
+          ))}
 
-        {/* Lantern */}
-        <View style={styles.lantern}>
-          <View style={styles.lanternFlame} />
-        </View>
+          {/* Lantern glow */}
+          <View style={styles.glowOuter} />
+          <View style={styles.glowMiddle} />
+          <View style={styles.glowInner} />
 
-        {/* Aetherling */}
-        <View style={styles.aetherling}>
-          <View style={styles.aetherlingBody}>
-            <View style={styles.ears}>
-              <View style={styles.ear} />
-              <View style={styles.ear} />
-            </View>
-            <View style={styles.face}>
-              <View style={styles.eyes}>
-                <View style={styles.eye} />
-                <View style={styles.eye} />
-              </View>
-              <View style={styles.nose} />
-            </View>
+          {/* Lantern */}
+          <View style={styles.lantern}>
+            <View style={styles.lanternFlame} />
           </View>
-          <Text style={styles.aetherlingName}>Aetherling</Text>
+
+          {/* Aetherling */}
+          <View style={styles.aetherling}>
+            <View style={styles.aetherlingBody}>
+              <View style={styles.ears}>
+                <View style={styles.ear} />
+                <View style={styles.ear} />
+              </View>
+              <View style={styles.face}>
+                <View style={styles.eyes}>
+                  <View style={styles.eye} />
+                  <View style={styles.eye} />
+                </View>
+                <View style={styles.nose} />
+              </View>
+            </View>
+            <Text style={styles.aetherlingName}>Aetherling</Text>
+          </View>
+
+          {/* Speech bubble */}
+          <SpeechBubble text={dialogue} />
+
+          {/* Progress hints */}
+          {!readyForCheckIn && !alreadyCheckedIn && (
+            <View style={styles.hintContainer}>
+              <Text style={styles.hintText}>
+                {clearedFog.size > 0 || clearedLeaves.size > 0
+                  ? "Keep going..."
+                  : "Swipe to clear the fog and leaves"}
+              </Text>
+              <View style={styles.progressDots}>
+                <View style={styles.progressGroup}>
+                  <Text style={styles.progressLabel}>Fog</Text>
+                  <View style={styles.dots}>
+                    {[1, 2, 3].map((i) => (
+                      <View
+                        key={`fog-${i}`}
+                        style={[
+                          styles.dot,
+                          clearedFog.size >= i && styles.dotFilled,
+                        ]}
+                      />
+                    ))}
+                  </View>
+                </View>
+                <View style={styles.progressGroup}>
+                  <Text style={styles.progressLabel}>Leaves</Text>
+                  <View style={styles.dots}>
+                    {[1, 2, 3].map((i) => (
+                      <View
+                        key={`leaf-${i}`}
+                        style={[
+                          styles.dot,
+                          clearedLeaves.size >= i && styles.dotFilled,
+                        ]}
+                      />
+                    ))}
+                  </View>
+                </View>
+              </View>
+            </View>
+          )}
         </View>
-
-        {/* Speech bubble */}
-        <SpeechBubble text={dialogue} />
-
-        {/* Scene actions */}
-        <View style={styles.sceneActions}>
-          <Pressable
-            style={[styles.sceneBtn, fogCleared && styles.sceneBtnDone]}
-            onPress={onFogClear}
-          >
-            <Text style={styles.sceneBtnText}>
-              {fogCleared ? "Fog cleared" : "Clear fog"}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={[styles.sceneBtn, leavesCleared && styles.sceneBtnDone]}
-            onPress={onLeavesClear}
-          >
-            <Text style={styles.sceneBtnText}>
-              {leavesCleared ? "Leaves swept" : "Brush leaves"}
-            </Text>
-          </Pressable>
-        </View>
-      </View>
+      </GestureDetector>
 
       {/* === RITUAL PANEL === */}
       <View style={[styles.ritual, { paddingBottom: insets.bottom + 20 }]}>
         {/* Emotion chips */}
-        {!emotion && (
+        {!emotion && !alreadyCheckedIn && (
           <View style={styles.emotionSection}>
             <Text style={styles.sectionLabel}>
               {readyForCheckIn
@@ -309,6 +625,20 @@ export default function HomeScreen() {
           </View>
         )}
 
+        {/* Already checked in today */}
+        {!emotion && alreadyCheckedIn && !questDone && (
+          <View style={styles.restSection}>
+            {worldState && worldState.totalDaysVisited > 0 && (
+              <Text style={styles.dayCount}>
+                Day {worldState.totalDaysVisited}
+              </Text>
+            )}
+            <Text style={styles.alreadyCheckedIn}>
+              You've tended the lantern today.
+            </Text>
+          </View>
+        )}
+
         {/* Today's small thing */}
         {emotion && !questDone && (
           <View style={styles.questSection}>
@@ -325,6 +655,11 @@ export default function HomeScreen() {
         {/* Rest */}
         {questDone && (
           <View style={styles.restSection}>
+            {worldState && worldState.totalDaysVisited > 0 && (
+              <Text style={styles.dayCount}>
+                Day {worldState.totalDaysVisited}
+              </Text>
+            )}
             <Pressable style={styles.restBtn} onPress={resetMorning}>
               <Text style={styles.restBtnText}>Rest here</Text>
             </Pressable>
@@ -343,40 +678,42 @@ const styles = StyleSheet.create({
 
   // === SCENE ===
   scene: {
-    height: height * 0.48,
+    height: SCENE_HEIGHT,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
   },
 
-  // Fog
-  fog: {
+  // Fog wisps
+  fogWisp: {
     position: "absolute",
-    backgroundColor: "rgba(180, 200, 220, 0.04)",
-    borderRadius: 100,
+    backgroundColor: "rgba(180, 200, 220, 0.08)",
+    borderRadius: 50,
   },
-  fog1: {
-    top: "15%",
-    left: -40,
-    width: "80%",
-    height: 60,
-    transform: [{ rotate: "-5deg" }],
+
+  // Leaves
+  leaf: {
+    position: "absolute",
+    zIndex: 15,
   },
-  fog2: {
-    top: "40%",
-    right: -30,
-    width: "70%",
-    height: 50,
-    transform: [{ rotate: "3deg" }],
+  leafTouchArea: {
+    padding: 15,
   },
-  fog3: {
-    bottom: "20%",
-    left: 20,
-    width: "60%",
-    height: 40,
+  leafBody: {
+    width: 24,
+    height: 16,
+    backgroundColor: "#8B6914",
+    borderRadius: 12,
+    borderTopLeftRadius: 3,
   },
-  fogCleared: {
-    opacity: 0.2,
+  leafStem: {
+    position: "absolute",
+    bottom: -4,
+    left: 10,
+    width: 2,
+    height: 8,
+    backgroundColor: "#5D4A1A",
+    borderRadius: 1,
   },
 
   // Glow
@@ -413,6 +750,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
+    zIndex: 10,
   },
   lanternFlame: {
     width: 10,
@@ -424,6 +762,7 @@ const styles = StyleSheet.create({
   // Aetherling
   aetherling: {
     alignItems: "center",
+    zIndex: 10,
   },
   aetherlingBody: {
     width: 64,
@@ -486,6 +825,7 @@ const styles = StyleSheet.create({
   speechBubbleContainer: {
     marginTop: 12,
     alignItems: "center",
+    zIndex: 10,
   },
   newDialogueDot: {
     position: "absolute",
@@ -529,28 +869,43 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
 
-  // Scene actions
-  sceneActions: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 16,
+  // Hints
+  hintContainer: {
+    position: "absolute",
+    bottom: 16,
+    alignItems: "center",
   },
-  sceneBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 200, 150, 0.1)",
-  },
-  sceneBtnDone: {
-    backgroundColor: "rgba(255, 200, 150, 0.1)",
-    borderColor: "rgba(255, 200, 150, 0.2)",
-  },
-  sceneBtnText: {
+  hintText: {
     fontSize: 12,
-    color: "rgba(255, 248, 240, 0.6)",
-    letterSpacing: 0.3,
+    color: "rgba(255, 200, 150, 0.4)",
+    marginBottom: 12,
+  },
+  progressDots: {
+    flexDirection: "row",
+    gap: 24,
+  },
+  progressGroup: {
+    alignItems: "center",
+  },
+  progressLabel: {
+    fontSize: 10,
+    color: "rgba(255, 200, 150, 0.3)",
+    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  dots: {
+    flexDirection: "row",
+    gap: 6,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "rgba(255, 200, 150, 0.15)",
+  },
+  dotFilled: {
+    backgroundColor: "rgba(255, 200, 150, 0.6)",
   },
 
   // === RITUAL ===
@@ -629,6 +984,19 @@ const styles = StyleSheet.create({
   // Rest
   restSection: {
     alignItems: "center",
+  },
+  dayCount: {
+    fontSize: 11,
+    color: "rgba(255, 200, 150, 0.35)",
+    letterSpacing: 2,
+    textTransform: "uppercase",
+    marginBottom: 8,
+  },
+  alreadyCheckedIn: {
+    fontSize: 14,
+    color: "rgba(255, 248, 240, 0.5)",
+    fontStyle: "italic",
+    textAlign: "center",
   },
   restBtn: {
     paddingVertical: 12,
