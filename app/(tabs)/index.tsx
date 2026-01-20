@@ -23,30 +23,40 @@ import {
 
 type Emotion = "stuck" | "frustrated" | "inspired" | "alright";
 
-// Helper to generate positions based on screen dimensions
-function getSceneConfig(width: number, height: number) {
-  const SCENE_HEIGHT = height * 0.55;
+// Helper to generate positions based on screen dimensions (mobile-first)
+function getSceneConfig(width: number, height: number, topInset: number) {
+  // Scene takes up 45% of screen - enough room for visuals
+  const SCENE_HEIGHT = height * 0.45;
 
+  // Account for safe area in positioning - add 20% of scene height to push everything down
+  const SAFE_OFFSET = topInset + SCENE_HEIGHT * 0.20;
+
+  // Path goes from bottom (where panda starts) to top (where door is)
+  // All y positions include safe area offset
   return {
     SCENE_HEIGHT,
     PATH_POINTS: [
-      { x: width * 0.5, y: SCENE_HEIGHT * 0.92 },
-      { x: width * 0.3, y: SCENE_HEIGHT * 0.78 },
-      { x: width * 0.6, y: SCENE_HEIGHT * 0.62 },
-      { x: width * 0.35, y: SCENE_HEIGHT * 0.46 },
-      { x: width * 0.5, y: SCENE_HEIGHT * 0.28 },
-      { x: width * 0.5, y: SCENE_HEIGHT * 0.18 },
+      { x: width * 0.5, y: SAFE_OFFSET + SCENE_HEIGHT * 0.55 },   // Start (bottom) - panda starts here
+      { x: width * 0.28, y: SAFE_OFFSET + SCENE_HEIGHT * 0.45 },  // Curve left
+      { x: width * 0.68, y: SAFE_OFFSET + SCENE_HEIGHT * 0.35 },  // Curve right
+      { x: width * 0.32, y: SAFE_OFFSET + SCENE_HEIGHT * 0.25 },  // Curve left
+      { x: width * 0.5, y: SAFE_OFFSET + SCENE_HEIGHT * 0.15 },   // Approach door
+      { x: width * 0.5, y: SAFE_OFFSET + SCENE_HEIGHT * 0.08 },   // At door
     ],
     FOG_WISPS: [
-      { id: 1, x: width * 0.35, y: SCENE_HEIGHT * 0.72, size: 100, rotation: -5 },
-      { id: 2, x: width * 0.55, y: SCENE_HEIGHT * 0.55, size: 90, rotation: 8 },
-      { id: 3, x: width * 0.4, y: SCENE_HEIGHT * 0.40, size: 85, rotation: -3 },
+      { id: 1, x: width * 0.30, y: SAFE_OFFSET + SCENE_HEIGHT * 0.40, size: 65, rotation: -5 },
+      { id: 2, x: width * 0.65, y: SAFE_OFFSET + SCENE_HEIGHT * 0.30, size: 60, rotation: 8 },
+      { id: 3, x: width * 0.38, y: SAFE_OFFSET + SCENE_HEIGHT * 0.22, size: 55, rotation: -3 },
     ],
     LEAVES: [
-      { id: 1, x: width * 0.4, y: SCENE_HEIGHT * 0.82, rotation: 45 },
-      { id: 2, x: width * 0.5, y: SCENE_HEIGHT * 0.65, rotation: -30 },
-      { id: 3, x: width * 0.38, y: SCENE_HEIGHT * 0.50, rotation: 60 },
+      { id: 1, x: width * 0.35, y: SAFE_OFFSET + SCENE_HEIGHT * 0.48, rotation: 45 },
+      { id: 2, x: width * 0.60, y: SAFE_OFFSET + SCENE_HEIGHT * 0.35, rotation: -30 },
+      { id: 3, x: width * 0.32, y: SAFE_OFFSET + SCENE_HEIGHT * 0.27, rotation: 60 },
     ],
+    DOOR_POSITION: {
+      top: SAFE_OFFSET,
+      left: width * 0.5 - 35,
+    },
   };
 }
 
@@ -151,6 +161,11 @@ function FogWisp({
           useNativeDriver: true,
         }),
       ]).start();
+    } else {
+      // Reset animations when not cleared
+      opacity.setValue(1);
+      scale.setValue(1);
+      translateY.setValue(0);
     }
   }, [cleared, opacity, scale, translateY]);
 
@@ -218,6 +233,12 @@ function Leaf({
           useNativeDriver: true,
         }),
       ]).start();
+    } else {
+      // Reset animations when not cleared
+      opacity.setValue(1);
+      translateX.setValue(0);
+      translateY.setValue(0);
+      spin.setValue(0);
     }
   }, [cleared, opacity, translateX, translateY, spin]);
 
@@ -268,13 +289,15 @@ function RedPanda({
   const opacity = useRef(new Animated.Value(1)).current;
   const bobble = useRef(new Animated.Value(0)).current;
 
-  // Update initial position when pathPoints change
+  // Update initial position when pathPoints change and reset opacity
   useEffect(() => {
     if (pathPoints[0]) {
       posX.setValue(pathPoints[0].x);
       posY.setValue(pathPoints[0].y);
+      opacity.setValue(1);
+      bobble.setValue(0);
     }
-  }, [pathPoints, posX, posY]);
+  }, [pathPoints, posX, posY, opacity, bobble]);
 
   useEffect(() => {
     if (isWalking && pathPoints.length > 1) {
@@ -379,6 +402,10 @@ function Door({ isOpen }: { isOpen: boolean }) {
           useNativeDriver: true,
         }),
       ]).start();
+    } else {
+      // Reset door when closed
+      doorRotation.setValue(0);
+      glowOpacity.setValue(0);
     }
   }, [isOpen, doorRotation, glowOpacity]);
 
@@ -456,12 +483,12 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
 
-  // Calculate scene config based on current dimensions
+  // Calculate scene config based on current dimensions (account for safe area)
   const sceneConfig = useMemo(
-    () => getSceneConfig(width, height),
-    [width, height]
+    () => getSceneConfig(width, height, insets.top),
+    [width, height, insets.top]
   );
-  const { SCENE_HEIGHT, PATH_POINTS, FOG_WISPS, LEAVES } = sceneConfig;
+  const { SCENE_HEIGHT, PATH_POINTS, FOG_WISPS, LEAVES, DOOR_POSITION } = sceneConfig;
 
   const [clearedFog, setClearedFog] = useState<Set<number>>(new Set());
   const [clearedLeaves, setClearedLeaves] = useState<Set<number>>(new Set());
@@ -694,7 +721,7 @@ export default function HomeScreen() {
 
       {/* === SCENE === */}
       <GestureDetector gesture={panGesture}>
-        <View style={[styles.scene, { paddingTop: insets.top, height: SCENE_HEIGHT }]}>
+        <View style={[styles.scene, { height: SCENE_HEIGHT }]}>
           {/* Stars */}
           {stars.map((star) => (
             <View
@@ -739,7 +766,7 @@ export default function HomeScreen() {
           </View>
 
           {/* Door at top of path */}
-          <View style={[styles.doorPosition, { top: SCENE_HEIGHT * 0.08, left: width * 0.5 - 35 }]}>
+          <View style={[styles.doorPosition, { top: DOOR_POSITION.top, left: DOOR_POSITION.left }]}>
             <Door isOpen={doorOpen} />
           </View>
 
@@ -776,54 +803,55 @@ export default function HomeScreen() {
               pathPoints={PATH_POINTS}
             />
           )}
+        </View>
+      </GestureDetector>
 
-          {/* Speech bubble near bottom */}
-          <View style={styles.dialoguePosition}>
-            <SpeechBubble text={dialogue} visible={showDialogue && !isWalking} />
-          </View>
+      {/* === UI ZONE (between scene and ritual) === */}
+      <View style={styles.uiZone}>
+        {/* Speech bubble */}
+        <SpeechBubble text={dialogue} visible={showDialogue && !isWalking} />
 
-          {/* Progress hints */}
-          {!pathCleared && !isWalking && (
-            <View style={styles.hintContainer}>
-              <Text style={styles.hintText}>
-                {clearedFog.size > 0 || clearedLeaves.size > 0
-                  ? "Keep clearing the path..."
-                  : "Swipe to clear the path"}
-              </Text>
-              <View style={styles.progressDots}>
-                <View style={styles.progressGroup}>
-                  <Text style={styles.progressLabel}>Fog</Text>
-                  <View style={styles.dots}>
-                    {FOG_WISPS.map((_, i) => (
-                      <View
-                        key={`fog-${i}`}
-                        style={[
-                          styles.dot,
-                          clearedFog.size > i && styles.dotFilled,
-                        ]}
-                      />
-                    ))}
-                  </View>
+        {/* Progress hints */}
+        {!pathCleared && !isWalking && (
+          <View style={styles.hintContainer}>
+            <Text style={styles.hintText}>
+              {clearedFog.size > 0 || clearedLeaves.size > 0
+                ? "Keep clearing the path..."
+                : "Swipe to clear the path"}
+            </Text>
+            <View style={styles.progressDots}>
+              <View style={styles.progressGroup}>
+                <Text style={styles.progressLabel}>Fog</Text>
+                <View style={styles.dots}>
+                  {FOG_WISPS.map((_, i) => (
+                    <View
+                      key={`fog-${i}`}
+                      style={[
+                        styles.dot,
+                        clearedFog.size > i && styles.dotFilled,
+                      ]}
+                    />
+                  ))}
                 </View>
-                <View style={styles.progressGroup}>
-                  <Text style={styles.progressLabel}>Leaves</Text>
-                  <View style={styles.dots}>
-                    {LEAVES.map((_, i) => (
-                      <View
-                        key={`leaf-${i}`}
-                        style={[
-                          styles.dot,
-                          clearedLeaves.size > i && styles.dotFilled,
-                        ]}
-                      />
-                    ))}
-                  </View>
+              </View>
+              <View style={styles.progressGroup}>
+                <Text style={styles.progressLabel}>Leaves</Text>
+                <View style={styles.dots}>
+                  {LEAVES.map((_, i) => (
+                    <View
+                      key={`leaf-${i}`}
+                      style={[
+                        styles.dot,
+                        clearedLeaves.size > i && styles.dotFilled,
+                      ]}
+                    />
+                  ))}
                 </View>
               </View>
             </View>
-          )}
-        </View>
-      </GestureDetector>
+          </View>
+        )}
+      </View>
 
       {/* === RITUAL PANEL === */}
       <View style={[styles.ritual, { paddingBottom: insets.bottom + 20 }]}>
@@ -1023,7 +1051,7 @@ const styles = StyleSheet.create({
   // Red Panda
   redPanda: {
     position: "absolute",
-    zIndex: 30,
+    zIndex: 50,
   },
   aetherlingBody: {
     width: 64,
@@ -1075,6 +1103,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#1a0a00",
   },
 
+  // UI Zone (between scene and ritual)
+  uiZone: {
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    minHeight: 100,
+  },
+
   // Speech bubble
   speechBubble: {
     backgroundColor: "rgba(255, 250, 240, 0.1)",
@@ -1083,7 +1119,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     borderWidth: 1,
     borderColor: "rgba(255, 200, 150, 0.2)",
-    maxWidth: 260,
+    maxWidth: 280,
+    marginBottom: 12,
   },
   speechText: {
     fontSize: 15,
@@ -1092,21 +1129,9 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 22,
   },
-  dialoguePosition: {
-    position: "absolute",
-    bottom: 60,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    zIndex: 40,
-  },
 
   // Hints
   hintContainer: {
-    position: "absolute",
-    bottom: 16,
-    left: 0,
-    right: 0,
     alignItems: "center",
   },
   hintText: {
@@ -1145,8 +1170,9 @@ const styles = StyleSheet.create({
   // === RITUAL ===
   ritual: {
     flex: 1,
-    paddingHorizontal: 28,
-    justifyContent: "center",
+    paddingHorizontal: 24,
+    justifyContent: "flex-start",
+    paddingTop: 8,
   },
 
   sectionLabel: {
