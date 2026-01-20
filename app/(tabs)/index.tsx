@@ -1,12 +1,13 @@
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
-  Dimensions,
+  Easing,
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -20,10 +21,34 @@ import {
   WorldState,
 } from "@/lib/storage";
 
-const { width, height } = Dimensions.get("window");
-const SCENE_HEIGHT = height * 0.48;
-
 type Emotion = "stuck" | "frustrated" | "inspired" | "alright";
+
+// Helper to generate positions based on screen dimensions
+function getSceneConfig(width: number, height: number) {
+  const SCENE_HEIGHT = height * 0.55;
+
+  return {
+    SCENE_HEIGHT,
+    PATH_POINTS: [
+      { x: width * 0.5, y: SCENE_HEIGHT * 0.92 },
+      { x: width * 0.3, y: SCENE_HEIGHT * 0.78 },
+      { x: width * 0.6, y: SCENE_HEIGHT * 0.62 },
+      { x: width * 0.35, y: SCENE_HEIGHT * 0.46 },
+      { x: width * 0.5, y: SCENE_HEIGHT * 0.28 },
+      { x: width * 0.5, y: SCENE_HEIGHT * 0.18 },
+    ],
+    FOG_WISPS: [
+      { id: 1, x: width * 0.35, y: SCENE_HEIGHT * 0.72, size: 100, rotation: -5 },
+      { id: 2, x: width * 0.55, y: SCENE_HEIGHT * 0.55, size: 90, rotation: 8 },
+      { id: 3, x: width * 0.4, y: SCENE_HEIGHT * 0.40, size: 85, rotation: -3 },
+    ],
+    LEAVES: [
+      { id: 1, x: width * 0.4, y: SCENE_HEIGHT * 0.82, rotation: 45 },
+      { id: 2, x: width * 0.5, y: SCENE_HEIGHT * 0.65, rotation: -30 },
+      { id: 3, x: width * 0.38, y: SCENE_HEIGHT * 0.50, rotation: 60 },
+    ],
+  };
+}
 
 const EMOTION_LABELS: Record<Emotion, string> = {
   stuck: "Stuck",
@@ -86,23 +111,6 @@ const QUESTS: Record<Emotion, string[]> = {
   ],
 };
 
-// Initial fog wisp positions (relative to scene)
-const FOG_WISPS = [
-  { id: 1, x: width * 0.15, y: SCENE_HEIGHT * 0.15, size: 90, rotation: -8 },
-  { id: 2, x: width * 0.55, y: SCENE_HEIGHT * 0.12, size: 70, rotation: 5 },
-  { id: 3, x: width * 0.3, y: SCENE_HEIGHT * 0.35, size: 100, rotation: -3 },
-  { id: 4, x: width * 0.7, y: SCENE_HEIGHT * 0.32, size: 80, rotation: 8 },
-  { id: 5, x: width * 0.1, y: SCENE_HEIGHT * 0.55, size: 85, rotation: -5 },
-];
-
-// Initial leaf positions
-const LEAVES = [
-  { id: 1, x: width * 0.2, y: SCENE_HEIGHT * 0.7, rotation: 45 },
-  { id: 2, x: width * 0.5, y: SCENE_HEIGHT * 0.75, rotation: -30 },
-  { id: 3, x: width * 0.75, y: SCENE_HEIGHT * 0.68, rotation: 60 },
-  { id: 4, x: width * 0.35, y: SCENE_HEIGHT * 0.82, rotation: -15 },
-  { id: 5, x: width * 0.6, y: SCENE_HEIGHT * 0.85, rotation: 30 },
-];
 
 // Interactive fog wisp component
 function FogWisp({
@@ -133,12 +141,12 @@ function FogWisp({
           useNativeDriver: true,
         }),
         Animated.timing(scale, {
-          toValue: 1.3,
+          toValue: 1.5,
           duration: 600,
           useNativeDriver: true,
         }),
         Animated.timing(translateY, {
-          toValue: -30,
+          toValue: -40,
           duration: 600,
           useNativeDriver: true,
         }),
@@ -152,23 +160,16 @@ function FogWisp({
         styles.fogWisp,
         {
           left: x - size / 2,
-          top: y - 25,
+          top: y - 30,
           width: size,
-          height: 50,
-          transform: [
-            { rotate: `${rotation}deg` },
-            { scale },
-            { translateY },
-          ],
+          height: 60,
+          transform: [{ rotate: `${rotation}deg` }, { scale }, { translateY }],
           opacity,
         },
       ]}
       pointerEvents={cleared ? "none" : "auto"}
     >
-      <Pressable
-        style={StyleSheet.absoluteFill}
-        onPress={onClear}
-      />
+      <Pressable style={StyleSheet.absoluteFill} onPress={onClear} />
     </Animated.View>
   );
 }
@@ -202,12 +203,12 @@ function Leaf({
           useNativeDriver: true,
         }),
         Animated.timing(translateX, {
-          toValue: direction * (50 + Math.random() * 50),
+          toValue: direction * (60 + Math.random() * 40),
           duration: 800,
           useNativeDriver: true,
         }),
         Animated.timing(translateY, {
-          toValue: -80 - Math.random() * 40,
+          toValue: -60 - Math.random() * 30,
           duration: 800,
           useNativeDriver: true,
         }),
@@ -243,10 +244,7 @@ function Leaf({
       ]}
       pointerEvents={cleared ? "none" : "auto"}
     >
-      <Pressable
-        style={styles.leafTouchArea}
-        onPress={onClear}
-      >
+      <Pressable style={styles.leafTouchArea} onPress={onClear}>
         <View style={styles.leafBody}>
           <View style={styles.leafStem} />
         </View>
@@ -255,82 +253,234 @@ function Leaf({
   );
 }
 
-// Animated speech bubble component
-function SpeechBubble({ text }: { text: string }) {
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
-  const dotOpacity = useRef(new Animated.Value(0)).current;
-  const prevTextRef = useRef(text);
+// Red Panda (Aetherling) component with walking animation
+function RedPanda({
+  isWalking,
+  onWalkComplete,
+  pathPoints,
+}: {
+  isWalking: boolean;
+  onWalkComplete: () => void;
+  pathPoints: { x: number; y: number }[];
+}) {
+  const posX = useRef(new Animated.Value(pathPoints[0]?.x ?? 0)).current;
+  const posY = useRef(new Animated.Value(pathPoints[0]?.y ?? 0)).current;
+  const opacity = useRef(new Animated.Value(1)).current;
+  const bobble = useRef(new Animated.Value(0)).current;
+
+  // Update initial position when pathPoints change
+  useEffect(() => {
+    if (pathPoints[0]) {
+      posX.setValue(pathPoints[0].x);
+      posY.setValue(pathPoints[0].y);
+    }
+  }, [pathPoints, posX, posY]);
 
   useEffect(() => {
-    if (prevTextRef.current !== text) {
-      prevTextRef.current = text;
+    if (isWalking && pathPoints.length > 1) {
+      // Create walking bobble animation
+      const bobbleAnim = Animated.loop(
+        Animated.sequence([
+          Animated.timing(bobble, {
+            toValue: -3,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+          Animated.timing(bobble, {
+            toValue: 0,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      bobbleAnim.start();
 
-      fadeAnim.setValue(0);
-      slideAnim.setValue(8);
-      dotOpacity.setValue(1);
+      // Walk along path points
+      const walkAnimations = pathPoints.slice(1).map((point, index) => {
+        const duration = index === pathPoints.length - 2 ? 400 : 600;
+        return Animated.parallel([
+          Animated.timing(posX, {
+            toValue: point.x,
+            duration,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(posY, {
+            toValue: point.y,
+            duration,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]);
+      });
 
+      // Add fade out at the door
+      const fadeOut = Animated.timing(opacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      });
+
+      Animated.sequence([...walkAnimations, fadeOut]).start(() => {
+        bobbleAnim.stop();
+        onWalkComplete();
+      });
+    }
+  }, [isWalking, posX, posY, opacity, bobble, onWalkComplete]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.redPanda,
+        {
+          transform: [
+            { translateX: Animated.subtract(posX, 32) },
+            { translateY: Animated.subtract(posY, 32) },
+            { translateY: bobble },
+          ],
+          opacity,
+        },
+      ]}
+    >
+      <View style={styles.aetherlingBody}>
+        <View style={styles.ears}>
+          <View style={styles.ear} />
+          <View style={styles.ear} />
+        </View>
+        <View style={styles.face}>
+          <View style={styles.eyes}>
+            <View style={styles.eye} />
+            <View style={styles.eye} />
+          </View>
+          <View style={styles.nose} />
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+// Door component
+function Door({ isOpen }: { isOpen: boolean }) {
+  const doorRotation = useRef(new Animated.Value(0)).current;
+  const glowOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (isOpen) {
       Animated.parallel([
-        Animated.timing(fadeAnim, {
+        Animated.timing(doorRotation, {
+          toValue: 1,
+          duration: 500,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(glowOpacity, {
           toValue: 1,
           duration: 400,
           useNativeDriver: true,
         }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 400,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      Animated.sequence([
-        Animated.delay(600),
-        Animated.timing(dotOpacity, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }),
       ]).start();
     }
-  }, [text, fadeAnim, slideAnim, dotOpacity]);
+  }, [isOpen, doorRotation, glowOpacity]);
+
+  const rotation = doorRotation.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "-70deg"],
+  });
 
   return (
-    <View style={styles.speechBubbleContainer}>
-      <Animated.View style={[styles.newDialogueDot, { opacity: dotOpacity }]} />
-      <View style={styles.speechBubble}>
-        <View style={styles.bubbleTail} />
-        <Animated.Text
+    <View style={styles.doorContainer}>
+      {/* Door glow */}
+      <Animated.View style={[styles.doorGlow, { opacity: glowOpacity }]} />
+
+      {/* Door frame */}
+      <View style={styles.doorFrame}>
+        {/* Inner darkness / light */}
+        <View style={styles.doorInner}>
+          <Animated.View
+            style={[styles.doorLight, { opacity: glowOpacity }]}
+          />
+        </View>
+
+        {/* Door panel */}
+        <Animated.View
           style={[
-            styles.speechText,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }],
-            },
+            styles.doorPanel,
+            { transform: [{ perspective: 200 }, { rotateY: rotation }] },
           ]}
         >
-          {text}
-        </Animated.Text>
+          <View style={styles.doorHandle} />
+        </Animated.View>
       </View>
+
+      {/* Arch top */}
+      <View style={styles.doorArch} />
     </View>
+  );
+}
+
+// Speech bubble component
+function SpeechBubble({ text, visible }: { text: string; visible: boolean }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const prevTextRef = useRef(text);
+
+  useEffect(() => {
+    if (visible && text) {
+      if (prevTextRef.current !== text) {
+        prevTextRef.current = text;
+        fadeAnim.setValue(0);
+      }
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 400,
+        useNativeDriver: true,
+      }).start();
+    } else {
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [text, visible, fadeAnim]);
+
+  if (!visible) return null;
+
+  return (
+    <Animated.View style={[styles.speechBubble, { opacity: fadeAnim }]}>
+      <Text style={styles.speechText}>{text}</Text>
+    </Animated.View>
   );
 }
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+
+  // Calculate scene config based on current dimensions
+  const sceneConfig = useMemo(
+    () => getSceneConfig(width, height),
+    [width, height]
+  );
+  const { SCENE_HEIGHT, PATH_POINTS, FOG_WISPS, LEAVES } = sceneConfig;
+
   const [clearedFog, setClearedFog] = useState<Set<number>>(new Set());
   const [clearedLeaves, setClearedLeaves] = useState<Set<number>>(new Set());
+  const [pathCleared, setPathCleared] = useState(false);
+  const [isWalking, setIsWalking] = useState(false);
+  const [doorOpen, setDoorOpen] = useState(false);
+  const [pandaGone, setPandaGone] = useState(false);
   const [emotion, setEmotion] = useState<Emotion | null>(null);
-  const [feedback, setFeedback] = useState<string>("");
   const [quest, setQuest] = useState<string>("");
   const [questDone, setQuestDone] = useState(false);
-  const [dialogue, setDialogue] = useState("Could you help me clear the way?");
+  const [dialogue, setDialogue] = useState("The path is blocked...");
+  const [showDialogue, setShowDialogue] = useState(true);
   const [newUnlocks, setNewUnlocks] = useState<string[]>([]);
   const [alreadyCheckedIn, setAlreadyCheckedIn] = useState(false);
   const [worldState, setWorldState] = useState<WorldState | null>(null);
 
-  const fogCleared = clearedFog.size >= 3;
-  const leavesCleared = clearedLeaves.size >= 3;
-  const readyForCheckIn = fogCleared || leavesCleared;
+  const fogCleared = clearedFog.size >= FOG_WISPS.length;
+  const leavesCleared = clearedLeaves.size >= LEAVES.length;
+  const allCleared = fogCleared && leavesCleared;
 
   // Load saved state on mount
   useEffect(() => {
@@ -346,29 +496,46 @@ export default function HomeScreen() {
         setAlreadyCheckedIn(true);
         setClearedFog(new Set(FOG_WISPS.map((f) => f.id)));
         setClearedLeaves(new Set(LEAVES.map((l) => l.id)));
+        setPathCleared(true);
+        setDoorOpen(true);
+        setPandaGone(true);
         if (todayLog.completedQuests.length > 0) {
           setQuestDone(true);
           setDialogue("Welcome back, Lanternkeeper.");
         } else {
-          setDialogue("You've already visited today.");
+          setDialogue("The path awaits.");
         }
       }
     }
     loadState();
-  }, []);
+  }, [FOG_WISPS, LEAVES]);
 
-  // Update dialogue when fog/leaves are cleared
+  // Check if path is cleared and trigger walking
   useEffect(() => {
-    if (!alreadyCheckedIn) {
-      if (fogCleared && !leavesCleared && clearedFog.size === 3) {
-        setDialogue("The fog thins a little.");
-      } else if (leavesCleared && !fogCleared && clearedLeaves.size === 3) {
-        setDialogue("Leaves drift away.");
-      } else if (fogCleared && leavesCleared) {
-        setDialogue("The path is clear.");
-      }
+    if (allCleared && !pathCleared && !isWalking) {
+      setDialogue("The way is clear!");
+      setShowDialogue(true);
+
+      // Short delay then open door and start walking
+      const timer = setTimeout(() => {
+        setDoorOpen(true);
+        setTimeout(() => {
+          setIsWalking(true);
+          setShowDialogue(false);
+        }, 600);
+      }, 800);
+
+      return () => clearTimeout(timer);
     }
-  }, [fogCleared, leavesCleared, clearedFog.size, clearedLeaves.size, alreadyCheckedIn]);
+  }, [allCleared, pathCleared, isWalking]);
+
+  const handleWalkComplete = useCallback(() => {
+    setIsWalking(false);
+    setPandaGone(true);
+    setPathCleared(true);
+    setDialogue("A new day begins.");
+    setShowDialogue(true);
+  }, []);
 
   const handleClearFog = useCallback((id: number) => {
     setClearedFog((prev) => {
@@ -376,9 +543,17 @@ export default function HomeScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const next = new Set(prev);
       next.add(id);
+
+      // Update dialogue
+      if (next.size === 1) {
+        setDialogue("The fog begins to lift...");
+      } else if (next.size === FOG_WISPS.length) {
+        setDialogue("The fog has cleared.");
+      }
+
       return next;
     });
-  }, []);
+  }, [FOG_WISPS.length]);
 
   const handleClearLeaf = useCallback((id: number) => {
     setClearedLeaves((prev) => {
@@ -386,35 +561,38 @@ export default function HomeScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       const next = new Set(prev);
       next.add(id);
+
+      if (next.size === LEAVES.length && clearedFog.size < FOG_WISPS.length) {
+        setDialogue("Leaves swept aside.");
+      }
+
       return next;
     });
-  }, []);
+  }, [clearedFog.size, LEAVES.length, FOG_WISPS.length]);
 
-  // Pan gesture for swiping across multiple elements
+  // Pan gesture for swiping
   const panGesture = Gesture.Pan()
     .onUpdate((event) => {
       const touchX = event.x;
       const touchY = event.y;
 
-      // Check fog wisps
       FOG_WISPS.forEach((wisp) => {
         if (!clearedFog.has(wisp.id)) {
           const dx = touchX - wisp.x;
           const dy = touchY - wisp.y;
           const distance = Math.sqrt(dx * dx + dy * dy);
-          if (distance < wisp.size / 2 + 20) {
+          if (distance < wisp.size / 2 + 25) {
             handleClearFog(wisp.id);
           }
         }
       });
 
-      // Check leaves
       LEAVES.forEach((leaf) => {
         if (!clearedLeaves.has(leaf.id)) {
           const dx = touchX - leaf.x;
           const dy = touchY - leaf.y;
           const distance = Math.sqrt(dx * dx + dy * dy);
-          if (distance < 35) {
+          if (distance < 40) {
             handleClearLeaf(leaf.id);
           }
         }
@@ -437,7 +615,7 @@ export default function HomeScreen() {
       setEmotion(e);
       setQuest(pickQuest(e));
       setQuestDone(false);
-      setDialogue("A path appears.");
+      setShowDialogue(false);
 
       const previousRegions = worldState?.unlockedRegions ?? ["lantern-clearing"];
       const updatedState = await recordDailyVisit(e);
@@ -457,7 +635,6 @@ export default function HomeScreen() {
   const onDone = useCallback(async () => {
     setQuestDone(true);
     const fb = pickFeedback(emotion!);
-    setFeedback(fb);
 
     if (newUnlocks.length > 0) {
       const regionNames: Record<string, string> = {
@@ -468,11 +645,12 @@ export default function HomeScreen() {
         "the-long-path": "The Long Path",
       };
       const unlockName = regionNames[newUnlocks[0]] ?? newUnlocks[0];
-      setDialogue(`New region unlocked: ${unlockName}`);
+      setDialogue(`New region: ${unlockName}`);
       setNewUnlocks([]);
     } else {
       setDialogue(fb);
     }
+    setShowDialogue(true);
 
     const questId = `${getTodayKey()}-${emotion}`;
     await completeQuest(questId);
@@ -481,26 +659,91 @@ export default function HomeScreen() {
   const resetMorning = () => {
     setClearedFog(new Set());
     setClearedLeaves(new Set());
+    setPathCleared(false);
+    setIsWalking(false);
+    setDoorOpen(false);
+    setPandaGone(false);
     setEmotion(null);
-    setFeedback("");
     setQuest("");
     setQuestDone(false);
     setAlreadyCheckedIn(false);
-    setDialogue("Could you help me clear the way?");
+    setDialogue("The path is blocked...");
+    setShowDialogue(true);
   };
+
+  const readyForCheckIn = pathCleared && pandaGone;
+
+  // Memoize star positions so they don't flicker
+  const stars = useMemo(() => {
+    return [...Array(20)].map((_, i) => ({
+      id: i,
+      left: Math.random(),
+      top: Math.random() * 0.3,
+      opacity: 0.3 + Math.random() * 0.5,
+      size: 1 + Math.random() * 2,
+    }));
+  }, []);
 
   return (
     <View style={styles.container}>
       <LinearGradient
-        colors={["#0a0f1a", "#141e30", "#0a0f1a"]}
+        colors={["#0a0f1a", "#1a1a2e", "#0a0f1a"]}
         locations={[0, 0.5, 1]}
         style={StyleSheet.absoluteFill}
       />
 
       {/* === SCENE === */}
       <GestureDetector gesture={panGesture}>
-        <View style={[styles.scene, { paddingTop: insets.top + 16 }]}>
-          {/* Interactive fog wisps */}
+        <View style={[styles.scene, { paddingTop: insets.top, height: SCENE_HEIGHT }]}>
+          {/* Stars */}
+          {stars.map((star) => (
+            <View
+              key={star.id}
+              style={[
+                styles.star,
+                {
+                  left: star.left * width,
+                  top: star.top * SCENE_HEIGHT,
+                  opacity: star.opacity,
+                  width: star.size,
+                  height: star.size,
+                },
+              ]}
+            />
+          ))}
+
+          {/* Winding path */}
+          <View style={styles.pathContainer}>
+            {PATH_POINTS.slice(0, -1).map((point, i) => {
+              const nextPoint = PATH_POINTS[i + 1];
+              const dx = nextPoint.x - point.x;
+              const dy = nextPoint.y - point.y;
+              const length = Math.sqrt(dx * dx + dy * dy);
+              const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+
+              return (
+                <View
+                  key={i}
+                  style={[
+                    styles.pathSegment,
+                    {
+                      left: point.x,
+                      top: point.y,
+                      width: length,
+                      transform: [{ rotate: `${angle}deg` }],
+                    },
+                  ]}
+                />
+              );
+            })}
+          </View>
+
+          {/* Door at top of path */}
+          <View style={[styles.doorPosition, { top: SCENE_HEIGHT * 0.08, left: width * 0.5 - 35 }]}>
+            <Door isOpen={doorOpen} />
+          </View>
+
+          {/* Fog wisps */}
           {FOG_WISPS.map((wisp) => (
             <FogWisp
               key={wisp.id}
@@ -513,7 +756,7 @@ export default function HomeScreen() {
             />
           ))}
 
-          {/* Interactive leaves */}
+          {/* Leaves */}
           {LEAVES.map((leaf) => (
             <Leaf
               key={leaf.id}
@@ -525,55 +768,38 @@ export default function HomeScreen() {
             />
           ))}
 
-          {/* Lantern glow */}
-          <View style={styles.glowOuter} />
-          <View style={styles.glowMiddle} />
-          <View style={styles.glowInner} />
+          {/* Red Panda */}
+          {!pandaGone && (
+            <RedPanda
+              isWalking={isWalking}
+              onWalkComplete={handleWalkComplete}
+              pathPoints={PATH_POINTS}
+            />
+          )}
 
-          {/* Lantern */}
-          <View style={styles.lantern}>
-            <View style={styles.lanternFlame} />
+          {/* Speech bubble near bottom */}
+          <View style={styles.dialoguePosition}>
+            <SpeechBubble text={dialogue} visible={showDialogue && !isWalking} />
           </View>
-
-          {/* Aetherling */}
-          <View style={styles.aetherling}>
-            <View style={styles.aetherlingBody}>
-              <View style={styles.ears}>
-                <View style={styles.ear} />
-                <View style={styles.ear} />
-              </View>
-              <View style={styles.face}>
-                <View style={styles.eyes}>
-                  <View style={styles.eye} />
-                  <View style={styles.eye} />
-                </View>
-                <View style={styles.nose} />
-              </View>
-            </View>
-            <Text style={styles.aetherlingName}>Aetherling</Text>
-          </View>
-
-          {/* Speech bubble */}
-          <SpeechBubble text={dialogue} />
 
           {/* Progress hints */}
-          {!readyForCheckIn && !alreadyCheckedIn && (
+          {!pathCleared && !isWalking && (
             <View style={styles.hintContainer}>
               <Text style={styles.hintText}>
                 {clearedFog.size > 0 || clearedLeaves.size > 0
-                  ? "Keep going..."
-                  : "Swipe to clear the fog and leaves"}
+                  ? "Keep clearing the path..."
+                  : "Swipe to clear the path"}
               </Text>
               <View style={styles.progressDots}>
                 <View style={styles.progressGroup}>
                   <Text style={styles.progressLabel}>Fog</Text>
                   <View style={styles.dots}>
-                    {[1, 2, 3].map((i) => (
+                    {FOG_WISPS.map((_, i) => (
                       <View
                         key={`fog-${i}`}
                         style={[
                           styles.dot,
-                          clearedFog.size >= i && styles.dotFilled,
+                          clearedFog.size > i && styles.dotFilled,
                         ]}
                       />
                     ))}
@@ -582,12 +808,12 @@ export default function HomeScreen() {
                 <View style={styles.progressGroup}>
                   <Text style={styles.progressLabel}>Leaves</Text>
                   <View style={styles.dots}>
-                    {[1, 2, 3].map((i) => (
+                    {LEAVES.map((_, i) => (
                       <View
                         key={`leaf-${i}`}
                         style={[
                           styles.dot,
-                          clearedLeaves.size >= i && styles.dotFilled,
+                          clearedLeaves.size > i && styles.dotFilled,
                         ]}
                       />
                     ))}
@@ -601,45 +827,37 @@ export default function HomeScreen() {
 
       {/* === RITUAL PANEL === */}
       <View style={[styles.ritual, { paddingBottom: insets.bottom + 20 }]}>
-        {/* Emotion chips */}
-        {!emotion && !alreadyCheckedIn && (
+        {/* Emotion selection */}
+        {readyForCheckIn && !emotion && !alreadyCheckedIn && (
           <View style={styles.emotionSection}>
-            <Text style={styles.sectionLabel}>
-              {readyForCheckIn
-                ? "How are you feeling"
-                : "Clear fog or leaves first"}
-            </Text>
-            {readyForCheckIn && (
-              <View style={styles.emotionRow}>
-                {(Object.keys(EMOTION_LABELS) as Emotion[]).map((e) => (
-                  <Pressable
-                    key={e}
-                    style={styles.emotionChip}
-                    onPress={() => onSelectEmotion(e)}
-                  >
-                    <Text style={styles.emotionText}>{EMOTION_LABELS[e]}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            )}
+            <Text style={styles.sectionLabel}>How are you feeling?</Text>
+            <View style={styles.emotionRow}>
+              {(Object.keys(EMOTION_LABELS) as Emotion[]).map((e) => (
+                <Pressable
+                  key={e}
+                  style={styles.emotionChip}
+                  onPress={() => onSelectEmotion(e)}
+                >
+                  <Text style={styles.emotionText}>{EMOTION_LABELS[e]}</Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
         )}
 
-        {/* Already checked in today */}
-        {!emotion && alreadyCheckedIn && !questDone && (
+        {/* Already checked in */}
+        {readyForCheckIn && !emotion && alreadyCheckedIn && !questDone && (
           <View style={styles.restSection}>
             {worldState && worldState.totalDaysVisited > 0 && (
-              <Text style={styles.dayCount}>
-                Day {worldState.totalDaysVisited}
-              </Text>
+              <Text style={styles.dayCount}>Day {worldState.totalDaysVisited}</Text>
             )}
             <Text style={styles.alreadyCheckedIn}>
-              You've tended the lantern today.
+              You've walked the path today.
             </Text>
           </View>
         )}
 
-        {/* Today's small thing */}
+        {/* Quest */}
         {emotion && !questDone && (
           <View style={styles.questSection}>
             <Text style={styles.sectionLabel}>Today's small thing</Text>
@@ -656,13 +874,18 @@ export default function HomeScreen() {
         {questDone && (
           <View style={styles.restSection}>
             {worldState && worldState.totalDaysVisited > 0 && (
-              <Text style={styles.dayCount}>
-                Day {worldState.totalDaysVisited}
-              </Text>
+              <Text style={styles.dayCount}>Day {worldState.totalDaysVisited}</Text>
             )}
             <Pressable style={styles.restBtn} onPress={resetMorning}>
-              <Text style={styles.restBtnText}>Rest here</Text>
+              <Text style={styles.restBtnText}>Walk again</Text>
             </Pressable>
+          </View>
+        )}
+
+        {/* Waiting state */}
+        {!readyForCheckIn && !isWalking && (
+          <View style={styles.waitingSection}>
+            <Text style={styles.waitingText}>Clear the path to continue</Text>
           </View>
         )}
       </View>
@@ -678,23 +901,104 @@ const styles = StyleSheet.create({
 
   // === SCENE ===
   scene: {
-    height: SCENE_HEIGHT,
-    alignItems: "center",
-    justifyContent: "center",
     overflow: "hidden",
   },
 
-  // Fog wisps
+  // Stars
+  star: {
+    position: "absolute",
+    backgroundColor: "#fff",
+    borderRadius: 1,
+  },
+
+  // Path
+  pathContainer: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  pathSegment: {
+    position: "absolute",
+    height: 24,
+    backgroundColor: "rgba(139, 119, 101, 0.25)",
+    borderRadius: 12,
+    transformOrigin: "left center",
+  },
+
+  // Door
+  doorPosition: {
+    position: "absolute",
+  },
+  doorContainer: {
+    width: 70,
+    height: 100,
+    alignItems: "center",
+  },
+  doorGlow: {
+    position: "absolute",
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255, 200, 100, 0.15)",
+    top: -10,
+    left: -25,
+  },
+  doorFrame: {
+    width: 60,
+    height: 85,
+    backgroundColor: "#2a1f1a",
+    borderRadius: 4,
+    borderWidth: 3,
+    borderColor: "#4a3a2a",
+    overflow: "hidden",
+  },
+  doorInner: {
+    flex: 1,
+    backgroundColor: "#0a0808",
+  },
+  doorLight: {
+    flex: 1,
+    backgroundColor: "rgba(255, 220, 150, 0.3)",
+  },
+  doorPanel: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#3d2d1d",
+    borderWidth: 2,
+    borderColor: "#5a4a3a",
+    justifyContent: "center",
+    alignItems: "flex-end",
+    paddingRight: 8,
+  },
+  doorHandle: {
+    width: 6,
+    height: 12,
+    backgroundColor: "#8B7355",
+    borderRadius: 3,
+  },
+  doorArch: {
+    position: "absolute",
+    top: -8,
+    width: 70,
+    height: 20,
+    backgroundColor: "#4a3a2a",
+    borderTopLeftRadius: 35,
+    borderTopRightRadius: 35,
+  },
+
+  // Fog
   fogWisp: {
     position: "absolute",
-    backgroundColor: "rgba(180, 200, 220, 0.08)",
+    backgroundColor: "rgba(180, 200, 220, 0.12)",
     borderRadius: 50,
+    zIndex: 20,
   },
 
   // Leaves
   leaf: {
     position: "absolute",
-    zIndex: 15,
+    zIndex: 25,
   },
   leafTouchArea: {
     padding: 15,
@@ -716,53 +1020,10 @@ const styles = StyleSheet.create({
     borderRadius: 1,
   },
 
-  // Glow
-  glowOuter: {
+  // Red Panda
+  redPanda: {
     position: "absolute",
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: "rgba(255, 180, 100, 0.04)",
-  },
-  glowMiddle: {
-    position: "absolute",
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: "rgba(255, 190, 120, 0.06)",
-  },
-  glowInner: {
-    position: "absolute",
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "rgba(255, 200, 140, 0.08)",
-  },
-
-  // Lantern
-  lantern: {
-    width: 22,
-    height: 30,
-    backgroundColor: "#2a1a0a",
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: "#4a3020",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 14,
-    zIndex: 10,
-  },
-  lanternFlame: {
-    width: 10,
-    height: 14,
-    borderRadius: 5,
-    backgroundColor: "#f4a040",
-  },
-
-  // Aetherling
-  aetherling: {
-    alignItems: "center",
-    zIndex: 10,
+    zIndex: 30,
   },
   aetherlingBody: {
     width: 64,
@@ -813,72 +1074,45 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: "#1a0a00",
   },
-  aetherlingName: {
-    marginTop: 8,
-    fontSize: 10,
-    letterSpacing: 2,
-    color: "rgba(255, 200, 150, 0.5)",
-    textTransform: "uppercase",
-  },
 
   // Speech bubble
-  speechBubbleContainer: {
-    marginTop: 12,
-    alignItems: "center",
-    zIndex: 10,
-  },
-  newDialogueDot: {
-    position: "absolute",
-    top: -4,
-    right: -4,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#f4a040",
-    zIndex: 10,
-  },
   speechBubble: {
-    backgroundColor: "rgba(255, 250, 240, 0.08)",
+    backgroundColor: "rgba(255, 250, 240, 0.1)",
     borderRadius: 16,
     paddingVertical: 12,
     paddingHorizontal: 20,
     borderWidth: 1,
-    borderColor: "rgba(255, 200, 150, 0.15)",
-    maxWidth: 280,
-    minHeight: 44,
-    justifyContent: "center",
-  },
-  bubbleTail: {
-    position: "absolute",
-    top: -6,
-    left: "50%",
-    marginLeft: -6,
-    width: 12,
-    height: 12,
-    backgroundColor: "rgba(255, 250, 240, 0.08)",
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderColor: "rgba(255, 200, 150, 0.15)",
-    transform: [{ rotate: "45deg" }],
+    borderColor: "rgba(255, 200, 150, 0.2)",
+    maxWidth: 260,
   },
   speechText: {
-    fontSize: 16,
+    fontSize: 15,
     color: "rgba(255, 248, 240, 0.85)",
     fontStyle: "italic",
     textAlign: "center",
     lineHeight: 22,
+  },
+  dialoguePosition: {
+    position: "absolute",
+    bottom: 60,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    zIndex: 40,
   },
 
   // Hints
   hintContainer: {
     position: "absolute",
     bottom: 16,
+    left: 0,
+    right: 0,
     alignItems: "center",
   },
   hintText: {
     fontSize: 12,
     color: "rgba(255, 200, 150, 0.4)",
-    marginBottom: 12,
+    marginBottom: 10,
   },
   progressDots: {
     flexDirection: "row",
@@ -917,7 +1151,7 @@ const styles = StyleSheet.create({
 
   sectionLabel: {
     fontSize: 11,
-    color: "rgba(255, 200, 150, 0.35)",
+    color: "rgba(255, 200, 150, 0.4)",
     letterSpacing: 1.5,
     textTransform: "uppercase",
     textAlign: "center",
@@ -940,7 +1174,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "rgba(255, 255, 255, 0.04)",
     borderWidth: 1,
-    borderColor: "rgba(255, 200, 150, 0.08)",
+    borderColor: "rgba(255, 200, 150, 0.1)",
   },
   emotionText: {
     fontSize: 13,
@@ -957,7 +1191,7 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     paddingHorizontal: 24,
     borderWidth: 1,
-    borderColor: "rgba(255, 200, 150, 0.06)",
+    borderColor: "rgba(255, 200, 150, 0.08)",
     marginBottom: 20,
     maxWidth: 280,
   },
@@ -971,9 +1205,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 32,
     borderRadius: 22,
-    backgroundColor: "rgba(255, 200, 150, 0.08)",
+    backgroundColor: "rgba(255, 200, 150, 0.1)",
     borderWidth: 1,
-    borderColor: "rgba(255, 200, 150, 0.15)",
+    borderColor: "rgba(255, 200, 150, 0.2)",
   },
   doneBtnText: {
     fontSize: 13,
@@ -1005,5 +1239,15 @@ const styles = StyleSheet.create({
   restBtnText: {
     fontSize: 12,
     color: "rgba(255, 200, 150, 0.4)",
+  },
+
+  // Waiting
+  waitingSection: {
+    alignItems: "center",
+  },
+  waitingText: {
+    fontSize: 13,
+    color: "rgba(255, 200, 150, 0.3)",
+    fontStyle: "italic",
   },
 });

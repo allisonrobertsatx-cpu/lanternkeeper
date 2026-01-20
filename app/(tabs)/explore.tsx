@@ -50,7 +50,8 @@ export default function ExploreScreen() {
           style: "destructive",
           onPress: async () => {
             await AsyncStorage.clear();
-            router.replace("/");
+            // Navigate directly to first-lantern to show the intro scene
+            router.replace("/first-lantern");
           },
         },
       ]
